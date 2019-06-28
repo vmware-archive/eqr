@@ -1,5 +1,5 @@
 
-#EQR
+# EQR
 ### Core Developer Team
 Anthony Merrill (cb-anthony-merrill), David Patawaran (dpat-cb), Jeremy Kelley (nod), Michael Xiao (mxiao-cb), Xavier Thierry (cb-xav)
 
@@ -16,7 +16,7 @@ EQR stems around the idea of simple worker(s), that run an EQR rule against inco
 
 Below is a visual of a typical EQR Application Workflow
 
-![alt text](https://github.com/carbonblack/eqr/tree/master/docs/EQRWorkflow.png "EQR Application Workflow")
+![alt text](https://github.com/carbonblack/eqr/blob/master/docs/images/EQRWorkflow.png "EQR Application Workflow")
 
 
 The first step when EQR starts up is pulls the necessary Rulesets, Rules, and Plugins from an S3 bucket supplied by the developer. The files are then downloaded stored, and Plugins are built at runtime. 
