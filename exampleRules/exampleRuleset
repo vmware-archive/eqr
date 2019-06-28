@@ -1,0 +1,7 @@
+{
+    "RuleName" : "example",
+    "RecordGenerator" : "exampleConsume.eqr",
+    "RecordRules": [
+	    { "Rule": "exampleBatch.eqr", "checkpoint": true }
+    ]
+}

@@ -1,0 +1,6 @@
+S3.BATCH[os, shard, eqr-getting-started-test, us-east-1, 60, 80000000](
+	{},
+	{SEND[
+		SENDALL(*)
+	]}
+)

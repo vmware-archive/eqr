@@ -1,0 +1,14 @@
+{
+	"DestRegion": "us-east-1",
+	"DestBucket": "eqr-getting-started-test",
+	"DestS3Path": "plugins/dest/",
+	"DestLocalPath": "./plugins/dest",
+	"OpRegion": "us-east-1",
+	"OpBucket": "eqr-getting-started-test",
+	"OpS3Path": "plugins/operators/",
+	"OpLocalPath": "./plugins/operators",
+	"RuleRegion": "us-east-1",
+	"RuleBucket": "eqr-getting-started-test",
+	"RulesetS3Path": "rulesets/",
+	"RulesS3Path": "rules/"
+}

@@ -1,0 +1,9 @@
+docs/
+unitTests/
+LICENSE
+README.md
+build.sh
+Makefile
+bypassRepoFiles.sh
+.gitignore
+.git/
