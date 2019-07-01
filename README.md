@@ -84,8 +84,7 @@ S3.BATCH[...parameters...](
  	    SEND[
  		    SENDALL(*);
  	    ]
- 	}
- )
+ 	})
 ```
 
 The Rule above does a few things. It defines that the destination is going to utilize the Batching plugin to S3 that comes as part of the EQR Language. The Predicate tells us, that whatever record is coming through on this rule has to have a JSON key of 'SomeKey' and it cannot be null. If a record comes through and has a JSON value with they key 'SomeKey' we will send ALL contents of the record to the destination.
@@ -101,13 +100,12 @@ EMIT.KINESIS[myKinesisStream,  ]({
 	JSON(SomeKey.Number) <= 42;
 	},
 	{
-        SEND[
-                JSON(SomeKey.MyChildKey) AS new_keyname;
-                JSON(SomeKey.Number) AS answer_to_life;
-                SPRINTF(STR(Hello my name is - %v %v.), JSON(SomeKey.FirstName), JSON(SomeKey.LastName)) AS name
-        ]
-	}
-})
+		SEND[
+			JSON(SomeKey.MyChildKey) AS new_keyname;
+			JSON(SomeKey.Number) AS answer_to_life;
+			SPRINTF(STR(Hello my name is - %v %v.), JSON(SomeKey.FirstName), JSON(SomeKey.LastName)) AS name
+		]
+	})
 ```
 
 The rule would take the record coming from the Consume MongoDB plugin and match the Predicate. If 'SomeKey' exists as-well as 'HasTowel' is true and 'Number' is less than or equal to 42 we will send a JSON formatted result that may look like the following.
@@ -125,7 +123,7 @@ EQR Provides a way to be both compact and verbose for translating data at real-t
 ###EQRLang
 The EQR Language is an extensible plugin system. The rules are built around the three requirements of Predicate, Projection, (Consumption/Destination). Operators, Functions and the way consuming and sending data to the final destination are exposed plugins that can be extended. 
 
-EQR supports the current `operators` out-of-the-box. 
+EQR supports the current `operators` out-of-the-box. *Note* these are for Predicate lines only. 
 
 | Operator | Returns      |
 | :------: | :-----------:|
@@ -136,7 +134,20 @@ EQR supports the current `operators` out-of-the-box.
 | `<=`     | true / false |
 | `>=`     | true / false |
 
-EQR supports the following `functions` out-of-the-box.
+In Addition to the operators listed above EQR supports Predicate `OR` keyword. Each semi-colon seperated line within a predicate is considered an `AND` statement to the following. You can therefore have something like the following:
+
+```
+EMIT.KINESIS[myKinesisStream,  ]({
+	JSON(SomeKey.HasTowel) == true OR JSON(SomeKey.Number) == 42;
+	},
+	{
+        	SEND[
+               		SENDALL(*);
+        	]
+	})
+```
+
+EQR supports the following `functions` out-of-the-box. *Note* For Projection lines the keyword `AS`is available, this instructs EQR to use the name to right of `AS` for the name of key being sent downstream. If you leave off the `AS` keyword, EQR will by default use the keyname from the data that it is parsing.
 
 | Function | Parameter(s) | Return Value |
 | :------: | :----------: | :-----: |
