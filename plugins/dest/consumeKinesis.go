@@ -96,7 +96,7 @@ func (g destpluginInterface) Initialize(args ...interface{}) (result interface{}
 		return nil, err
 	}
 
-	if strings.EqualFold(strings.TrimSpace(splits[4]), "true") {
+	if strings.EqualFold(strings.TrimSpace(splits[5]), "true") {
 		err = k.CreateRequiredTables()
 		if err != nil {
 			log.WithFields(logrus.Fields{
