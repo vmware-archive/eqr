@@ -119,7 +119,7 @@ func (s *S3BufferClient) Init() {
 	// begin batching
 }
 
-
+func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region string, Flush_Interval int64, MAX_BUFFER_SIZE int64, Config string, metricSender *metrics.MetricSender) (*S3BufferClient, error) {
 
 	BufferClient := &S3BufferClient{
 		Env:             Env,
