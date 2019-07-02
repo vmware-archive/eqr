@@ -107,6 +107,7 @@ type S3BufferClient struct {
 	MetricSender     *metrics.MetricSender
 	TmpFile          string
 	Last_Flush_File  string
+	Lock_File		 string
 	// add compress level for gzip
 }
 
@@ -119,7 +120,6 @@ func (s *S3BufferClient) Init() {
 }
 
 
-func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region string, Flush_Interval int64, MAX_BUFFER_SIZE int64, Config string, metricSender *metrics.MetricSender) (*S3BufferClient, error) {
 
 	BufferClient := &S3BufferClient{
 		Env:             Env,
@@ -141,35 +141,45 @@ func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region strin
 }
 
 func (s *S3BufferClient) PutRecordInBuffer(record []byte, seq Sequence) string {
-	record = append(record, []byte("\n")...)
-	tmp, err := os.OpenFile(s.TmpFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModeAppend)
-	if err != nil { 
-		logger.WithFields(logrus.Fields{
-		  "shardId": s.Shard_Id,
-		  "tmpFile": s.TmpFile,
-		  "err": err.Error(),
-		}).Error("Error opening tmp file")
-        panic(err) 
+
+	if s.TmpFile == s.Lock_File && s.Lock_File != "" {
+		for {
+			if s.TmpFile != s.Lock_File {
+				break
+			}
+		}
+
 	}
 
-    defer func() {
-        if err := tmp.Close(); err != nil {
-        	logger.WithFields(logrus.Fields{
-			  "shardId": s.Shard_Id,
-			  "tmpFile": s.TmpFile,
-			  "err": err.Error(),
+	record = append(record, []byte("\n")...)
+	tmp, err := os.OpenFile(s.TmpFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModeAppend)
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"shardId": s.Shard_Id,
+			"tmpFile": s.TmpFile,
+			"err": err.Error(),
+		}).Error("Error opening tmp file")
+		panic(err)
+	}
+
+	defer func() {
+		if err := tmp.Close(); err != nil {
+			logger.WithFields(logrus.Fields{
+				"shardId": s.Shard_Id,
+				"tmpFile": s.TmpFile,
+				"err": err.Error(),
 			}).Error("Error closing tmp file")
-            panic(err)
-        }
-    }()
+			panic(err)
+		}
+	}()
 	if _, err := tmp.Write(record); err != nil {
 		logger.WithFields(logrus.Fields{
-		  "shardId": s.Shard_Id,
-		  "tmpFile": s.TmpFile,
-		  "err": err.Error(),
+			"shardId": s.Shard_Id,
+			"tmpFile": s.TmpFile,
+			"err": err.Error(),
 		}).Error("Error writing to tmp file")
-        panic(err)
-    }
+		panic(err)
+	}
 
 	s.Buffer_Size += int64(len(record)) + 1
 	s.Buffer_Seq = seq
@@ -181,13 +191,13 @@ func (s *S3BufferClient) Begin_Background_Worker(s3u s3manageriface.UploaderAPI)
 	for s.Worker_Is_Alive {
 		if s.ReadyToFlush() {
 			logger.WithFields(logrus.Fields{
-			  "shardId": s.Shard_Id,
+				"shardId": s.Shard_Id,
 			}).Debug("Starting the Flush!")
 			err := s.FlushToS3(s3u)
 			if err != nil {
 				logger.WithFields(logrus.Fields{
-				  "shardId": s.Shard_Id,
-				  "err": err.Error(),
+					"shardId": s.Shard_Id,
+					"err": err.Error(),
 				}).Error("Flush received an error")
 				s.Worker_Is_Alive = false
 			}
@@ -209,18 +219,21 @@ func (s *S3BufferClient) ReadyToFlush() bool {
 }
 
 func (s *S3BufferClient) FlushToS3(s3u s3manageriface.UploaderAPI) error {
+
 	dimensions := make(map[string]string)
 	dimensions["shardId"] = s.Shard_Id
 	if s.Buffer_Size <= 0 {
 		logger.WithFields(logrus.Fields{
-		  "shardId": s.Shard_Id,
+			"shardId": s.Shard_Id,
 		}).Debug("Attempting to flush empty buffer")
 		s.Reset_Buffer()
 		return nil
 	}
+
+	s.Lock_File = s.TmpFile
 	startTime := time.Now()
 	fileMutex.Lock()
-    defer fileMutex.Unlock()
+	defer fileMutex.Unlock()
 
 	cmd := exec.Command("gzip", "-f", s.TmpFile)
 	cmd.Stdout = os.Stdout
@@ -252,12 +265,12 @@ func (s *S3BufferClient) FlushToS3(s3u s3manageriface.UploaderAPI) error {
 
 	err = s.UploadToS3(s3u, bytesReader, s.S3_Bucket, key)
 	logger.WithFields(logrus.Fields{
-	  "shardId": s.Shard_Id,
+		"shardId": s.Shard_Id,
 	}).Debug("Uploaded to S3")
 	if err != nil {
 		logger.WithFields(logrus.Fields{
-		  "shardId": s.Shard_Id,
-		  "err": err.Error(),
+			"shardId": s.Shard_Id,
+			"err": err.Error(),
 		}).Fatal("Error uploading file to S3")
 	}
 
@@ -290,6 +303,7 @@ func (s *S3BufferClient) Reset_Buffer() {
 		s.Last_Flush_File = s.TmpFile
 	}
 	s.TmpFile = fmt.Sprintf("/tmp/eqr/%v", uuid.NewV4().String())
+	s.Lock_File = ""
 	s.GzipBuffer.Reset()
 	s.Buffer_Size = 0
 	s.Last_Flush = int64(time.Now().Unix())
