@@ -142,7 +142,7 @@ func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region strin
 
 func (s *S3BufferClient) PutRecordInBuffer(record []byte, seq Sequence) string {
 
-	if s.TmpFile == s.Lock_File && s.Lock_File != "" {
+	if s.TmpFile == s.Lock_File {
 		for {
 			if s.TmpFile != s.Lock_File {
 				break
