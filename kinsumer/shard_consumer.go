@@ -165,8 +165,7 @@ func (k *Kinsumer) captureShard(shardID string) (*checkpointer, error) {
 			k.dynamodb,
 			k.clientName,
 			k.clientID,
-			k.maxAgeForClientRecord,
-			k.config.stats)
+			k.maxAgeForClientRecord)
 		if err != nil {
 			logger.WithFields(logrus.Fields{
 				"shardId": shardID,
