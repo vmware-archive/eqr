@@ -25,6 +25,7 @@ type checkpointer struct {
 	ownerName             string
 	ownerID               string
 	maxAgeForClientRecord time.Duration
+	stats                 StatReceiver
 	captured              bool
 	dirty                 bool
 	mutex                 sync.Mutex
@@ -54,7 +55,8 @@ func capture(
 	dynamodbiface dynamodbiface.DynamoDBAPI,
 	ownerName string,
 	ownerID string,
-	maxAgeForClientRecord time.Duration) (*checkpointer, error) {
+	maxAgeForClientRecord time.Duration,
+	stats StatReceiver) (*checkpointer, error) {
 
 	cutoff := time.Now().Add(-maxAgeForClientRecord).UnixNano()
 
@@ -149,6 +151,7 @@ func capture(
 		dynamodb:              dynamodbiface,
 		ownerName:             ownerName,
 		ownerID:               ownerID,
+		stats:                 stats,
 		sequenceNumber:        aws.StringValue(record.SequenceNumber),
 		maxAgeForClientRecord: maxAgeForClientRecord,
 		captured:              true,
@@ -157,7 +160,8 @@ func capture(
 	logger.WithFields(logrus.Fields{
 	    "sequenceNumber": record.SequenceNumber,
 		"shardId": shardID,
-	}).Info("Checkpoint captured")
+	    "ownerId": ownerID,
+	}).Debug("Checkpoint captured")
 
 	return checkpointer, nil
 }
@@ -226,6 +230,7 @@ func (cp *checkpointer) commit() (bool, error) {
 		logger.WithFields(logrus.Fields{
 		  "sequenceNumber": sn,
 		  "shardId": cp.shardID,
+		  "ownerId": cp.ownerID,
 		  "err": err.Error(),
 		}).Error("error committing checkpoint")
 		return false, fmt.Errorf("error committing checkpoint: %s", err)
@@ -234,8 +239,11 @@ func (cp *checkpointer) commit() (bool, error) {
 	logger.WithFields(logrus.Fields{
 	    "sequenceNumber": sn,
 		"shardId": cp.shardID,
-	}).Info("Checkpoint committed")
+	}).Debug("Checkpoint committed")
 
+	if sn != nil {
+		cp.stats.Checkpoint()
+	}
 	cp.dirty = false
 	return finished, nil
 }
@@ -277,6 +285,10 @@ func (cp *checkpointer) release() error {
 		return fmt.Errorf("error releasing checkpoint: %s", err)
 	}
 
+	if cp.sequenceNumber != "" {
+		cp.stats.Checkpoint()
+	}
+
 	cp.captured = false
 
 	logger.WithFields(logrus.Fields{
@@ -288,41 +300,17 @@ func (cp *checkpointer) release() error {
 }
 
 // update updates the current sequenceNumber of the checkpoint, marking it dirty if necessary
-func (cp *checkpointer) update(seqNum *string, checkChan chan int, refCount int) {
-	if refCount != 0 {
-	RecordLoop:
-		for {
-			select {
-			case <-checkChan:
-					refCount -= 1
-					logger.WithFields(logrus.Fields{
-					    "sequenceNumber": cp.sequenceNumber,
-						"shardId": cp.shardID,
-						"remainingRefs": refCount,
-					}).Debug("A checkpoint record reference has been closed")
-
-				if refCount <= 0 {
-					break RecordLoop
-				}
-			}
-		}
-	}
-	logger.WithFields(logrus.Fields{
-	    "sequenceNumber": cp.sequenceNumber,
-		"shardId": cp.shardID,
-	}).Debug("All checkpoint record references closed")
-
+func (cp *checkpointer) update(seqNum string) {
 	cp.mutex.Lock()
 	defer cp.mutex.Unlock()
-	cp.dirty = cp.dirty || cp.sequenceNumber != *seqNum
-	cp.sequenceNumber = *seqNum
+	cp.dirty = cp.dirty || cp.sequenceNumber != seqNum
+	cp.sequenceNumber = seqNum
 
 	logger.WithFields(logrus.Fields{
 	    "sequenceNumber": cp.sequenceNumber,
 		"shardId": cp.shardID,
 	}).Debug("Checkpoint updated")
 
-	close(checkChan)
 	logger.WithFields(logrus.Fields{
 	    "sequenceNumber": cp.sequenceNumber,
 		"shardId": cp.shardID,
@@ -340,7 +328,7 @@ func (cp *checkpointer) finish(sequenceNumber string) {
 	logger.WithFields(logrus.Fields{
 	    "sequenceNumber": sequenceNumber,
 		"shardId": cp.shardID,
-	}).Info("Checkpoint finished")
+	}).Debug("Checkpoint finished")
 }
 
 // loadCheckpoints returns checkpoint records from dynamo mapped by shard id.
@@ -389,7 +377,7 @@ func loadCheckpoints(db dynamodbiface.DynamoDBAPI, tableName string) (map[string
 	logger.WithFields(logrus.Fields{
 	    "table": tableName,
 		"checkpoints": checkpointMap,
-	}).Info("Checkpoints loaded")
+	}).Debug("Checkpoints loaded")
 
 	return checkpointMap, nil
 }

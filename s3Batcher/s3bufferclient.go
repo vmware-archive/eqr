@@ -1,26 +1,3 @@
-/*
-# The MIT License (MIT)
-#
-# Copyright (c) 2019  Carbon Black
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-*/
 package s3batcher
 
 import (
@@ -104,31 +81,37 @@ type S3BufferClient struct {
 	Worker_Is_Alive  bool
 	RecordBuffer     Buffer
 	GzipBuffer       Buffer
-	MetricSender     *metrics.MetricSender
+	MetricSender     *metrics.SfxClient
 	TmpFile          string
 	Last_Flush_File  string
-	Lock_File		 string
+	Next_Flush_File  string
+	LockFile	 bool
+	LockFileBuffer	 [][]byte
+	FilePointer	 *os.File
 	// add compress level for gzip
 }
 
 func (s *S3BufferClient) Init() {
 	os.Mkdir("/tmp/eqr", 0777)
+	s.Next_Flush_File = fmt.Sprintf("/tmp/eqr/%v", uuid.NewV4().String())
 	s.Reset_Buffer()
 	s.Worker_Is_Alive = true
 	s.Compress_Level = 4
 	// begin batching
 }
 
-func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region string, Flush_Interval int64, MAX_BUFFER_SIZE int64, Config string, metricSender *metrics.MetricSender) (*S3BufferClient, error) {
+
+func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region string, Flush_Interval int64, MAX_BUFFER_SIZE int64, Config string, metricSender *metrics.SfxClient) (*S3BufferClient, error) {
 
 	BufferClient := &S3BufferClient{
 		Env:             Env,
 		Shard_Id:        Shard_Id,
 		S3_Bucket:       S3_Bucket,
 		Flush_Interval:  Flush_Interval,
-    	MAX_BUFFER_SIZE: MAX_BUFFER_SIZE,
+    		MAX_BUFFER_SIZE: MAX_BUFFER_SIZE,
 		Config:          Config,
 		MetricSender:    metricSender,
+		LockFileBuffer:  make([][]byte, 0),
 	}
 
 	logger.WithFields(logrus.Fields{
@@ -140,64 +123,90 @@ func NewBufferClient(Env string, Shard_Id string, S3_Bucket string, Region strin
 	return BufferClient, nil
 }
 
-func (s *S3BufferClient) PutRecordInBuffer(record []byte, seq Sequence) string {
+func PutRecordInBuffer(s *S3BufferClient, record []byte, seq Sequence, isOverflowData bool) (bool, error) {
+	record = append(record, []byte("\n")...)
 
-	if s.TmpFile == s.Lock_File && s.Lock_File != "" {
-		for {
-			if s.TmpFile != s.Lock_File {
-				break
+	if s.LockFile == true {
+		if isOverflowData == false {
+			s.LockFileBuffer = append(s.LockFileBuffer, record)
+			return true, nil
+		} else {
+			return false, fmt.Errorf("OVERFLOW_LOCK")
+		}
+	}
+
+	if s.FilePointer == nil {
+		tmpFile, err := os.OpenFile(s.TmpFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModeAppend)
+		if err != nil {
+			logger.WithFields(logrus.Fields{
+			  "shardId": s.Shard_Id,
+			  "tmpFile": s.TmpFile,
+			  "err": err.Error(),
+			}).Error("Error opening tmp file")
+			return false, err
+		}
+
+		// set the file pointer
+		s.FilePointer = tmpFile
+	}
+
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	if s.LockFile == true {
+		if isOverflowData == false {
+			s.LockFileBuffer = append(s.LockFileBuffer, record)
+			return true, nil
+		} else {
+			return false, fmt.Errorf("OVERFLOW_LOCK")
+		}
+	}
+
+	if _, err := s.FilePointer.Write(record); err != nil {
+
+		if s.LockFile == false { 
+			logger.WithFields(logrus.Fields{
+			  "shardId": s.Shard_Id,
+			  "tmpFile": s.TmpFile,
+			  "err": err.Error(),
+			}).Error("Error writing to tmp file")
+			return false, err
+		} else {
+			if isOverflowData == false {
+				s.LockFileBuffer = append(s.LockFileBuffer, record)
+
+				logger.WithFields(logrus.Fields{
+					"shardID" : s.Shard_Id,
+					"tmpFile": s.TmpFile,
+				}).Info("File was flushed before writing")
+				return true, nil
+			} else {
+				return false, fmt.Errorf("OVERFLOW_LOCK")
 			}
 		}
-
-	}
-
-	record = append(record, []byte("\n")...)
-	tmp, err := os.OpenFile(s.TmpFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModeAppend)
-	if err != nil {
-		logger.WithFields(logrus.Fields{
-			"shardId": s.Shard_Id,
-			"tmpFile": s.TmpFile,
-			"err": err.Error(),
-		}).Error("Error opening tmp file")
-		panic(err)
-	}
-
-	defer func() {
-		if err := tmp.Close(); err != nil {
-			logger.WithFields(logrus.Fields{
-				"shardId": s.Shard_Id,
-				"tmpFile": s.TmpFile,
-				"err": err.Error(),
-			}).Error("Error closing tmp file")
-			panic(err)
-		}
-	}()
-	if _, err := tmp.Write(record); err != nil {
-		logger.WithFields(logrus.Fields{
-			"shardId": s.Shard_Id,
-			"tmpFile": s.TmpFile,
-			"err": err.Error(),
-		}).Error("Error writing to tmp file")
-		panic(err)
 	}
 
 	s.Buffer_Size += int64(len(record)) + 1
 	s.Buffer_Seq = seq
 
-	return s.TmpFile
+	return true, nil
 }
 
 func (s *S3BufferClient) Begin_Background_Worker(s3u s3manageriface.UploaderAPI) {
 	for s.Worker_Is_Alive {
 		if s.ReadyToFlush() {
 			logger.WithFields(logrus.Fields{
-				"shardId": s.Shard_Id,
+			  "shardId": s.Shard_Id,
+			  "buffer": s.Buffer_Size,
+			  "Max Buffer": s.MAX_BUFFER_SIZE,
+			  "age": s.Buffer_Age,
+			  "last age": s.Last_Flush,
 			}).Debug("Starting the Flush!")
-			err := s.FlushToS3(s3u)
+			err := FlushToS3(s, s3u)
 			if err != nil {
 				logger.WithFields(logrus.Fields{
-					"shardId": s.Shard_Id,
-					"err": err.Error(),
+				  "shardId": s.Shard_Id,
+				  "err": err.Error(),
 				}).Error("Flush received an error")
 				s.Worker_Is_Alive = false
 			}
@@ -218,22 +227,53 @@ func (s *S3BufferClient) ReadyToFlush() bool {
 	return false
 }
 
-func (s *S3BufferClient) FlushToS3(s3u s3manageriface.UploaderAPI) error {
-
+func FlushToS3(s *S3BufferClient, s3u s3manageriface.UploaderAPI) error {
 	dimensions := make(map[string]string)
 	dimensions["shardId"] = s.Shard_Id
-	if s.Buffer_Size <= 0 {
+	if s.Buffer_Size <= 0 || s.FilePointer == nil {
 		logger.WithFields(logrus.Fields{
-			"shardId": s.Shard_Id,
+		  "shardId": s.Shard_Id,
 		}).Debug("Attempting to flush empty buffer")
 		s.Reset_Buffer()
 		return nil
 	}
 
-	s.Lock_File = s.TmpFile
+	if _, err := os.Stat(s.TmpFile); os.IsNotExist(err) {
+		logger.WithFields(logrus.Fields{
+			"shardID" : s.Shard_Id,
+			"tmpfile" : s.TmpFile,
+			"buffer" : s.Buffer_Size,
+			"Filepointer" : s.FilePointer,
+			"lock" : s.LockFile,
+			"overflow len" : len(s.LockFileBuffer),
+		}).Info("File doesnt exist yet, small race")
+		return nil
+	}
+
+	// if we are already locked, return
+	if s.LockFile == true {
+		logger.WithFields(logrus.Fields{
+			"tmpfile" : s.TmpFile,
+			"overflow len" : len(s.LockFileBuffer),
+		}).Info("File already locked")
+		return nil
+	}
+
+	s.LockFile = true
+
+	time.Sleep( 250  * time.Millisecond)
+	closeErr := s.FilePointer.Close();
+	if closeErr != nil {
+		logger.WithFields(logrus.Fields{
+			"file" : s.TmpFile,
+			"err" : closeErr,
+		}).Fatal("Failed to close the file")
+
+		panic(closeErr)
+	}
+	s.FilePointer = nil
+
 	startTime := time.Now()
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
 
 	cmd := exec.Command("gzip", "-f", s.TmpFile)
 	cmd.Stdout = os.Stdout
@@ -260,31 +300,46 @@ func (s *S3BufferClient) FlushToS3(s3u s3manageriface.UploaderAPI) error {
 	s.Flushed_Seq_List = append(s.Flushed_Seq_List, s.Buffer_Seq)
 
 	gzFileName := fmt.Sprintf("%v.gz", s.TmpFile)
+	
+	if _, err := os.Stat(gzFileName); os.IsNotExist(err) {
+		logger.WithFields(logrus.Fields{
+			"file": s.TmpFile,
+			"gzfile" : gzFileName,
+		}).Debug("gzip file doesn't exist")
+	}
+
 	data, err := ioutil.ReadFile(gzFileName)
 	bytesReader := bytes.NewReader(data)
 
-	err = s.UploadToS3(s3u, bytesReader, s.S3_Bucket, key)
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"gzfile" : gzFileName,
+			"err" : err.Error(),
+		}).Debug("GZIP Read ERROR")
+	}
+
+	err = UploadToS3(s3u, bytesReader, s.S3_Bucket, key)
 	logger.WithFields(logrus.Fields{
-		"shardId": s.Shard_Id,
+	  "gzfile": gzFileName,
 	}).Debug("Uploaded to S3")
 	if err != nil {
 		logger.WithFields(logrus.Fields{
-			"shardId": s.Shard_Id,
-			"err": err.Error(),
-		}).Fatal("Error uploading file to S3")
+		  "shardId": s.Shard_Id,
+		  "err": err.Error(),
+		}).Debug("Error uploading file to S3")
 	}
 
 	endTime := time.Now()
 	diff := endTime.Sub(startTime)
 	batchTime := float64(diff) / float64(time.Millisecond)
-	(*s.MetricSender).SendGauge("s3_batch_time", batchTime, dimensions)
-	(*s.MetricSender).SendGauge("s3_buffer_size", s.Buffer_Size, dimensions)
+	s.MetricSender.SendGauge("s3_batch_time", batchTime, dimensions)
+	s.MetricSender.SendGauge("s3_buffer_size", s.Buffer_Size, dimensions)
 
 	s.Reset_Buffer()
 	return err
 }
 
-func (s *S3BufferClient) UploadToS3(s3u s3manageriface.UploaderAPI, file io.Reader, bucket string, key string) error {
+func UploadToS3(s3u s3manageriface.UploaderAPI, file io.Reader, bucket string, key string) error {
 	encoding := "gzip"
 	contentType := "application/json"
 	_, err := s3u.Upload(&s3manager.UploadInput{
@@ -300,14 +355,33 @@ func (s *S3BufferClient) UploadToS3(s3u s3manageriface.UploaderAPI, file io.Read
 func (s *S3BufferClient) Reset_Buffer() {
 	if s.TmpFile != "" {
 		os.Remove(s.TmpFile)
+		gzFile := fmt.Sprintf("%v.gz", s.TmpFile)
+		os.Remove(gzFile)
 		s.Last_Flush_File = s.TmpFile
 	}
-	s.TmpFile = fmt.Sprintf("/tmp/eqr/%v", uuid.NewV4().String())
-	s.Lock_File = ""
+	s.TmpFile = s.Next_Flush_File
+	s.Next_Flush_File = fmt.Sprintf("/tmp/eqr/%v", uuid.NewV4().String())
 	s.GzipBuffer.Reset()
 	s.Buffer_Size = 0
 	s.Last_Flush = int64(time.Now().Unix())
+
+	s.LockFile = false
+	go s.releaseLockFileBuffer()
+
 	runtime.GC()
+}
+
+func (s *S3BufferClient) releaseLockFileBuffer() {
+	overflow := make([][]byte, 0)
+	for _, record := range s.LockFileBuffer {
+		_, err := PutRecordInBuffer(s, record, Sequence{}, true)
+		if err != nil && err.Error() == "OVERFLOW_LOCK" {
+			overflow = append(overflow, record)
+		}
+	}
+
+	s.LockFileBuffer = make([][]byte, 0)
+	copy(s.LockFileBuffer, overflow)
 }
 
 func (s *S3BufferClient) Background_Worker_Is_Dead() bool {
@@ -321,7 +395,7 @@ func (s *S3BufferClient) Remove_Flush() {
 	s.Flushed_Seq_List = make([]Sequence, 0)
 }
 
-func (s *S3BufferClient) Get_Key_Prefix() string {
+func Get_Key_Prefix() string {
 	t := time.Now()
 	prefix := fmt.Sprintf("%d-%02d-%02d/%02d%02d",
 		t.Year(), t.Month(), t.Day(),
@@ -330,7 +404,7 @@ func (s *S3BufferClient) Get_Key_Prefix() string {
 }
 
 func (s *S3BufferClient) Get_Key() string {
-	key_prefix := s.Get_Key_Prefix()
+	key_prefix := Get_Key_Prefix()
 	timestamp := time.Now().Unix()
 	suffix := ".gz"
 	key := fmt.Sprintf("%s/%s-%d%s", key_prefix, s.Shard_Id, timestamp, suffix)

@@ -47,15 +47,21 @@ func TestConfigErrors(t *testing.T) {
 	config = NewConfig().WithBufferSize(0)
 	err = validateConfig(&config)
 	require.EqualError(t, err, ErrConfigInvalidBufferSize.Error())
+
+	config = NewConfig().WithStats(nil)
+	err = validateConfig(&config)
+	require.EqualError(t, err, ErrConfigInvalidStats.Error())
 }
 
 func TestConfigWithMethods(t *testing.T) {
+	stats := &NoopStatReceiver{}
 	config := NewConfig().
 		WithBufferSize(1).
 		WithCommitFrequency(1 * time.Second).
 		WithShardCheckFrequency(1 * time.Second).
 		WithLeaderActionFrequency(1 * time.Second).
-		WithThrottleDelay(1 * time.Second)
+		WithThrottleDelay(1 * time.Second).
+		WithStats(stats)
 
 	err := validateConfig(&config)
 	require.NoError(t, err)
@@ -65,4 +71,5 @@ func TestConfigWithMethods(t *testing.T) {
 	require.Equal(t, 1*time.Second, config.commitFrequency)
 	require.Equal(t, 1*time.Second, config.shardCheckFrequency)
 	require.Equal(t, 1*time.Second, config.leaderActionFrequency)
+	require.Equal(t, stats, config.stats)
 }

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/request"
@@ -224,6 +223,17 @@ func (k *Kinsumer) refreshShards() (bool, error) {
 		return false, err
 	}
 
+	if len(shardIDs) == 0 {
+		shardIDs, err = loadShardIDsFromKinesis(k.kinesis, k.streamName)
+		if err == nil {
+			err = k.setCachedShardIDs(shardIDs)
+		}
+	}
+
+	if err != nil {
+			return false, err
+        }
+
 	changed := (totalClients != k.totalClients) ||
 		(thisClient != k.thisClient) ||
 		(len(k.shardIDs) != len(shardIDs))
@@ -440,12 +450,12 @@ func (k *Kinsumer) kinesisStreamReady() error {
 	}
 
 	status := aws.StringValue(out.StreamDescription.StreamStatus)
-	if status != "ACTIVE" {
+	if status != "ACTIVE" && status != "UPDATING" {
 		logger.WithFields(logrus.Fields{
 			"name":   k.streamName,
 			"status": status,
-		}).Error("Kinesis Stream is not in active state")
-		return fmt.Errorf("stream %s exists but state '%s' is not 'ACTIVE'", k.streamName, status)
+		}).Error("Kinesis Stream is not in active state or updating")
+		return fmt.Errorf("stream %s exists but state '%s' is not 'ACTIVE' or 'UPDATING'", k.streamName, status)
 	}
 
 	return nil
@@ -521,11 +531,7 @@ func (k *Kinsumer) Run(fatalErr chan error) error {
 				}).Error("error deregistering client")
 				k.errors <- fmt.Errorf("error deregistering client: %s", err)
 			}
-			if k.isLeader {
-				close(k.leaderLost)
-				k.leaderLost = nil
-				k.isLeader = false
-			}
+			k.unbecomeLeader()
 			// Do this outside the k.isLeader check in case k.isLeader was false because
 			// we lost leadership but haven't had time to shutdown the goroutine yet.
 			k.leaderWG.Wait()

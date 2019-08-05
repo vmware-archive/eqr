@@ -12,13 +12,9 @@ import (
 func TestCheckpointer(t *testing.T) {
 	table := "checkpoints"
 	mock := mocks.NewMockDynamo([]string{table})
-	testChan := make(chan int)
-	seq1 := "seq1"
-	seq2 := "seq2"
-	seq3 := "seq3"
-	lastseq := "lastseq"
+	stats := &NoopStatReceiver{}
 
-	cp, err := capture("shard", table, mock, "ownerName", "ownerId", 3*time.Minute)
+	cp, err := capture("shard", table, mock, "ownerName", "ownerId", 3*time.Minute, stats)
 
 	// Initially, we expect that there is no record, so our new record should have no sequence number
 	if err != nil {
@@ -33,7 +29,7 @@ func TestCheckpointer(t *testing.T) {
 
 	// Update the sequence number. This shouldn't cause any external request.
 	mocks.AssertNoRequestsMade(t, mock.(*mocks.MockDynamo), "update(seq1)", func() {
-		cp.update(&seq1, testChan, 0)
+		cp.update("seq1")
 	})
 
 	// Now actually commit.
@@ -44,8 +40,7 @@ func TestCheckpointer(t *testing.T) {
 	})
 
 	// Call update, but keep the same sequence number
-	testChan = make(chan int)
-	cp.update(&seq1, testChan, 0)
+	cp.update("seq1")
 
 	// Since the sequence number hasn't changed, committing shouldn't make a request.
 	mocks.AssertNoRequestsMade(t, mock.(*mocks.MockDynamo), "commit unchanged sequence number", func() {
@@ -55,8 +50,7 @@ func TestCheckpointer(t *testing.T) {
 	})
 
 	// Call update again with a new value
-	testChan = make(chan int)
-	cp.update(&seq2, testChan, 0)
+	cp.update("seq2")
 
 	// committing should trigger a request
 	mocks.AssertRequestMade(t, mock.(*mocks.MockDynamo), "commit(seq2)", func() {
@@ -66,10 +60,8 @@ func TestCheckpointer(t *testing.T) {
 	})
 
 	// Call update with a new value twice in a row
-	testChan = make(chan int)
-	cp.update(&seq3, testChan, 0)
-	testChan = make(chan int)
-	cp.update(&seq3, testChan, 0)
+	cp.update("seq3")
+	cp.update("seq3")
 
 	// This should still trigger an update
 	mocks.AssertRequestMade(t, mock.(*mocks.MockDynamo), "commit(seq3)", func() {
@@ -79,7 +71,7 @@ func TestCheckpointer(t *testing.T) {
 	})
 
 	// Try to get another checkpointer for this shard, should not succeed but not error
-	cp2, err := capture("shard", table, mock, "differentOwner", "differentOwnerId", 3*time.Minute)
+	cp2, err := capture("shard", table, mock, "differentOwner", "differentOwnerId", 3*time.Minute, stats)
 	if err != nil {
 		t.Errorf("cp2 first attempt err=%q", err)
 	}
@@ -87,8 +79,7 @@ func TestCheckpointer(t *testing.T) {
 		t.Errorf("Should not be able to steal shard")
 	}
 
-	testChan = make(chan int)
-	cp.update(&lastseq, testChan, 0)
+	cp.update("lastseq")
 
 	// release should trigger an update
 	mocks.AssertRequestMade(t, mock.(*mocks.MockDynamo), "cp.release()", func() {

@@ -1,26 +1,3 @@
-/*
-# The MIT License (MIT)
-#
-# Copyright (c) 2019  Carbon Black
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-*/
 package ruleset
 
 import (
@@ -42,7 +19,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tkanos/gonfig"
 
-	chk "github.com/carbonblack/eqr/checkpoint"
 	"github.com/carbonblack/eqr/logging"
 	"github.com/carbonblack/eqr/metrics"
 	plg "github.com/carbonblack/eqr/ruleset/pluginInterfaces"
@@ -547,7 +523,7 @@ func initRule(name string, rule string, shardID string, builtRules *map[string]*
 
 	checkpoint := checkpointRules[name]
 	var metricSender = metrics.GetSfxClient()
-	tmp := builder.GetRule(name, &metricSender)
+	tmp := builder.GetRule(name, metricSender.(*metrics.SfxClient))
 	tmp.Checkpoint = checkpoint
 	(*builtRules)[name] = &tmp
 
@@ -563,7 +539,7 @@ func RunRecordRules() {
 		logger.WithFields(logrus.Fields{
 			"rule": name,
 		}).Info("Running Record Generation")
-		err := rule.RunRecordGeneration(fatalErr)
+		err := rl.RunRecordGeneration(rule, fatalErr)
 
 		if err != nil {
 			logger.WithFields(logrus.Fields{
@@ -587,21 +563,30 @@ func RunRecordRules() {
 	}
 }
 
-func RunRules(recordStruct *chk.CheckpointIdentifier, rules *map[string]*rl.Rulebase) {
-	for name, rule := range *rules {
-		logger.WithFields(logrus.Fields{
-			"rule": name,
-		}).Debug("Running worker rule")
-		go rule.RunRule(recordStruct)
+func RuleMatch(rule *rl.Rulebase, record string) (bool, []byte, error) {
+	var outbound []byte
+	pred, _, err := rl.RunProjection(rule, record, "PREDICATE")
+	if err != nil {
+		return false, outbound, err
 	}
+
+	cache, _, err := rl.RunProjection(rule, record, "CACHE")
+
+	if err != nil {
+                return false, outbound, err
+        }
+
+	proj, outbound, err := rl.RunProjection(rule, record, "PROJECTION")
+
+	if err != nil {
+                return false, outbound, err
+        }
+
+	return pred && cache && proj, outbound, nil
 }
 
 func DeleteRule(name string) {
-	delete(rules, name)
-}
-
-func PurgeRules() {
-	rules = make(map[string]string, 0)
+	//delete(builtRules, name)
 }
 
 // loads all the destinations
@@ -922,9 +907,9 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 				firstFunkPlg = GetFunction(firstFunk)
 			}
 
-		//	logger.WithFields(logrus.Fields{
-	//			"name": (*firstFunkPlg).Name(),
-	//		}).Debug("First Function Plugin")
+			logger.WithFields(logrus.Fields{
+				"name": (*firstFunkPlg).Name(),
+			}).Debug("First Function Plugin")
 
 			tStep := &rl.Step{
 				Plugin:    firstFunkPlg,
@@ -963,20 +948,6 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 			multiargs[i] = strings.Trim(multiargs[i], " )\t\n")
 
 			res, _, _, ID = FindFuncRecursive(multiargs[i], builder, isProject, realID, isMulti, isOr)
-
-			logger.WithFields(logrus.Fields{
-				"res":    res,
-				"ID": ID,
-				"realID": realID,
-				"val": val,
-				"isMulti": isMulti,
-				"wasMulti": wasMulti,
-			}).Debug("MultiArg Recursion Result - TEST")
-
-			// if it is false, we need to think, is this a value that needs to be added as a step for other
-			// functions or is it something else?
-
-
 			val = multiargs[i]
 			if realID != "" {
 				ID = realID
@@ -984,12 +955,6 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 				ID = val
 			}
 		}
-
-		logger.WithFields(logrus.Fields{
-			"isProject":    isProject,
-			"ID": ID,
-			"bit": bit,
-		}).Debug("Recursive Value Check")
 
 		if strings.EqualFold(isProject, "PROJECTION") && bit == false {
 			step := &rl.Step{
@@ -1007,7 +972,6 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 				"functionCounter": funcCounter,
 				"length":          len(multiargs),
 				"isMulti":         isMulti,
-				"wasMulti": wasMulti,
 			}).Debug("Pushing back Step")
 
 			builder.AddProjectStep(step, len(multiargs) < isMulti && isMulti > 1)
@@ -1021,21 +985,20 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 			}
 
 			if isMulti != 0 {
-				logger.WithFields(logrus.Fields{
-					"functionName":    (*function).Name(),
-					"stepValue":       step.Value,
-					"projectValue":    val,
-					"functionCounter": funcCounter,
-					"length":          len(multiargs),
-					"isMulti":         isMulti,
-					"wasMulti": wasMulti,
-				}).Debug("Pushing back Step - 2")
 				if isOr {
 					builder.OrPredicate(step, len(multiargs) < isMulti && isMulti > 1)
 				} else {
 					builder.AddStep(step, len(multiargs) < isMulti && isMulti > 1)
 				}
-			}
+				//fmt.Printf("Pushing back Step (%v) = %v\n", (*function).Name(), step.Value)
+				//fmt.Printf("Project.Value -> %v\n", val)
+				//fmt.Printf("FunctionCounter = %v\nLength= %v\n", funcCounter, len(multiargs))
+				//fmt.Printf("Is Multi? `%v`\n", isMulti)
+			} //else {
+			//	fmt.Printf("No adding the step -> (%v) - (%v)\n", isMulti, len(multiargs))
+			//	fmt.Printf("Step Information -> \n\t %v\n\t %v \n\t %v \n\t %v\n", (*function).Name(),
+			//		val, ID, res)
+			//}
 
 			logger.WithFields(logrus.Fields{
 				"functionName":    (*function).Name(),
@@ -1044,7 +1007,6 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 				"functionCounter": funcCounter,
 				"length":          len(multiargs),
 				"isMulti":         isMulti,
-				"wasMulti": wasMulti,
 			}).Debug("Pushing back Step")
 
 		} else if strings.EqualFold(isProject, "CACHE") && bit == false {
@@ -1063,30 +1025,15 @@ func FindFuncRecursive(rule string, builder *bldr.Rule, isProject string, realID
 				"functionCounter": funcCounter,
 				"length":          len(multiargs),
 				"isMulti":         isMulti,
-				"wasMulti": wasMulti,
 			}).Debug("Pushing back Cache Step")
 
 			builder.AddCacheStep(step, len(multiargs) < isMulti && isMulti > 1)
 		} else {
-			logger.WithFields(logrus.Fields{
-				"projectValue":    val,
-				"functionCounter": funcCounter,
-				"realID": realID,
-				"isMulti":         isMulti,
-				"wasMulti": wasMulti,
-			}).Debug("FALSE NO STEP ADDED")
 			return false, wasMulti, function, ID
 		}
 		return true, wasMulti, function, ID
 	}
 
-
-	logger.WithFields(logrus.Fields{
-		"realID": realID,
-		"isMulti":         isMulti,
-		"rule": rule,
-		"wasMulti": wasMulti,
-	}).Debug("FALSE NO STEP ADDED - MISSING ()")
 	return false, wasMulti, nil, rule
 }
 
