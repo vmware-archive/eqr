@@ -26,10 +26,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/sirupsen/logrus"
+	"github.com/carbonblack/eqr/logging"
 )
 
-type destpluginInterface string
+var log = logging.GetLogger()
 
+type destpluginInterface string
 
 func (g destpluginInterface) Initialize(args ...interface{}) (result interface{}, err error) {
 
@@ -45,7 +48,12 @@ func (g destpluginInterface) DoCheckpoint() bool {
 }
 
 func (g destpluginInterface) Publish(args ...interface{}) (result bool, err error) {
-	fmt.Printf("The value(s) to be sent downstream -> \n`%v`\n", string(args[1].([]byte)))
+	fmt.Printf("The value(s) to be sent downstream -> \n`%v`\n", )
+
+	log.WithFields(logrus.Fields{
+		"plugin": g.Name(),
+		"Data": string(args[1].([]byte)),
+	}).Info("Dummy Destination Publish Function")
 
 	return true, nil
 }
