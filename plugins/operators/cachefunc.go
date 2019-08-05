@@ -46,7 +46,7 @@ func (g pluginInterface) Runnable(args ...interface{}) (result interface{}, err 
 	    "arg2": args[1],
 	}).Debug("Cache operator arguments")
 
-	cash.AddCache(args[0].(string), args[1].(string))
+	cash.AddCache(args[0].(string), args[1])
 
 	return true, nil
 }

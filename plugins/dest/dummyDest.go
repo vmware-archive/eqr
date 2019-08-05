@@ -45,7 +45,7 @@ func (g destpluginInterface) DoCheckpoint() bool {
 }
 
 func (g destpluginInterface) Publish(args ...interface{}) (result bool, err error) {
-	fmt.Printf("The value(s) to be sent downstream -> \n`%v`\n", string(*args[1].(*[]byte)))
+	fmt.Printf("The value(s) to be sent downstream -> \n`%v`\n", string(args[1].([]byte)))
 
 	return true, nil
 }

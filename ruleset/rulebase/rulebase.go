@@ -248,8 +248,7 @@ func RunProjection(r *Rulebase, record string, ruleProperty string) (result bool
 
 			if ruleProperty == "CACHE" && step != i.Value.(Base).Line.Front().Value.(*Step) {
 				if (*i.Value.(Base).Line.Front().Value.(*Step)).Plugin != nil {
-					tmp := res.(string)
-					(*i.Value.(Base).Line.Front().Value.(*Step).Plugin).Runnable(*step.ID, tmp)
+					(*i.Value.(Base).Line.Front().Value.(*Step).Plugin).Runnable(*step.ID, res)
 				}
 			}
 

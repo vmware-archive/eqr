@@ -17,7 +17,7 @@ import (
 	rec "github.com/carbonblack/eqr/records"
 	"github.com/carbonblack/eqr/ruleset"
 	rl "github.com/carbonblack/eqr/ruleset/rulebase"
-	"github.com/carbonblack/eqr/snappy"
+	"github.com/golang/snappy"
 )
 
 const (

@@ -32,7 +32,8 @@ import (
 
 	cash "github.com/carbonblack/eqr/ruleset/cacher"
 	cft "github.com/carbonblack/eqr/ruleset/cuckooFilter"
-	chk "github.com/carbonblack/eqr/checkpoint"
+	rs "github.com/carbonblack/eqr/ruleset"
+	rl "github.com/carbonblack/eqr/ruleset/rulebase"
 	"github.com/carbonblack/eqr/ruleset"
 	"testing"
 	"time"
@@ -499,11 +500,11 @@ func TestCacheRuleOne(t *testing.T) {
 	val_one := cash.GetCache("value_one")
 	val_two := cash.GetCache("value_two")
 
-	if strings.EqualFold(val_one.(string), "1234") == false {
+	if val_one != 1234.0 {
 		t.Errorf("First Value doesn't match = %v", val_one)
 	}
 
-	if strings.EqualFold(val_two.(string), "55") == false {
+	if val_two != 55.0 {
 		t.Errorf("Second Value doesn't match = %v", val_two)
 	}
 
@@ -596,18 +597,14 @@ func TestJsonExtract(t *testing.T) {
 func runTest(payload string) {
 	allRecordRules, _ := ruleset.InitWorkerRuleset("one")
 
-	shardId := "one"
-	seqNum := "2346786543245676543567"
-	//var checkChan chan *chk.CheckpointIdentifier
-	recordStruct := &chk.CheckpointIdentifier{
-		Id:      &seqNum,
-		ShardId: &shardId,
-		Payload: &payload,
-	}
-
 	for _, rule := range *allRecordRules {
-		rule.RunRule(recordStruct)
-
+		match, outbound, err := rs.RuleMatch(rule, payload)
+		if match && err == nil && outbound != nil {
+			success, err := rl.RunRule(rule, "00001111122222", outbound)
+			if !success && err != nil {
+				fmt.Print(err.Error())
+			}
+		}
 	}
 
 	fmt.Println("EQR Worker Shutting Down")
