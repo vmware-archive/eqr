@@ -27,8 +27,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"time"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -82,7 +80,7 @@ func (g destpluginInterface) Initialize(args ...interface{}) (result interface{}
 	buffer, _ := strconv.ParseInt(strings.TrimSpace(splits[5]), 10, 64)
 	myBufferClient, _ := s3batcher.NewBufferClient(strings.TrimSpace(splits[0]), strings.TrimSpace(splits[1]),
 		strings.TrimSpace(splits[2]), strings.TrimSpace(splits[3]),
-		flush, buffer, "no config", &metricSender)
+		flush, buffer, "no config", metricSender.(*metrics.SfxClient))
 
 	myBufferClient.Init()
 	go myBufferClient.Begin_Background_Worker(myUploader)
@@ -105,6 +103,8 @@ func (g destpluginInterface) DoCheckpoint() bool {
 }
 
 func (g destpluginInterface) Publish(args ...interface{}) (result bool, err error) {
+	dimensions := make(map[string]string)
+	dimensions["plugin"] = g.Name()
 
 	if len(args) <= 1 {
 		log.WithFields(logrus.Fields{
@@ -117,7 +117,7 @@ func (g destpluginInterface) Publish(args ...interface{}) (result bool, err erro
 
 	// the first argument is buffer client; we can ignore this
 	// the second is the byte array
-	record := *args[1].(*[]byte)
+	record := args[1].([]byte)
 
 	if record == nil {
 		log.WithFields(logrus.Fields{
@@ -126,21 +126,18 @@ func (g destpluginInterface) Publish(args ...interface{}) (result bool, err erro
 		return false, errors.New("Projection byte array is null.")
 	}
 
-	file := bufferClient.PutRecordInBuffer(record, s3batcher.Sequence{0, 2})
+	success, err :=  s3batcher.PutRecordInBuffer(bufferClient, record, s3batcher.Sequence{0, 2}, false)
 
-	for {
-		if file == bufferClient.Last_Flush_File {
-			bufferClient.Remove_Flush()
-			log.WithFields(logrus.Fields{
-				"plugin": g.Name(),
-			}).Debug("Successfully flushed S3 batch")
-			return true, nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+                        "plugin": g.Name(),
+			"err": err.Error(),
+                }).Fatal("Unable to write record to buffer")
 	}
 
-	return false, errors.New("Flush timed out")
+	return success, err
 }
+
 
 func (g destpluginInterface) Name() string {
 	return "S3.BATCH"

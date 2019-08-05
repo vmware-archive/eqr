@@ -240,7 +240,7 @@ func (r *Rule) SetDestination(destPlugin *plg.IOPluginInterface, worker interfac
 }
 
 // This returns the rule
-func (r *Rule) GetRule(name string, metricSender *metrics.MetricSender) rl.Rulebase {
+func (r *Rule) GetRule(name string, metricSender *metrics.SfxClient) rl.Rulebase {
 	r.rule.MetricSender = metricSender
 	r.rule.RuleName = name
 	return r.rule

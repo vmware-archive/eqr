@@ -114,7 +114,7 @@ func (g destpluginInterface) DoCheckpoint() bool {
 func (g destpluginInterface) Publish(args ...interface{}) (result bool, err error) {
 	
 	workerNode := args[0].(*KinesisWorker)
-	data := *args[1].(*[]byte)
+	data := args[1].([]byte)
 	dimensions := args[2].(map[string]string)
 	partitionKey := uuid.New()
 

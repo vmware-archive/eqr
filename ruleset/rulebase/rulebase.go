@@ -27,14 +27,10 @@ import (
 	"container/list"
 	"encoding/json"
 	"errors"
-	"reflect"
-	"time"
-	"fmt"
 
 	"github.com/carbonblack/eqr/metrics"
 	"github.com/sirupsen/logrus"
 
-	chk "github.com/carbonblack/eqr/checkpoint"
 	"github.com/carbonblack/eqr/logging"
 	plg "github.com/carbonblack/eqr/ruleset/pluginInterfaces"
 )
@@ -62,7 +58,7 @@ type Step struct {
 
 type Rulebase struct {
 	RuleName     string
-	MetricSender *metrics.MetricSender
+	MetricSender *metrics.SfxClient
 	Predicate    *list.List
 	Projection   *list.List
 	Cache        *list.List
@@ -72,7 +68,7 @@ type Rulebase struct {
 
 var logger = logging.GetLogger()
 
-func (r *Rulebase) RunRecordGeneration(fatalErr chan error) (err error) {
+func RunRecordGeneration(r *Rulebase, fatalErr chan error) (err error) {
 	// run the Consume
 	logger.WithFields(logrus.Fields{
 		"rule": (*r.Destination.Plugin).Name(),
@@ -83,133 +79,15 @@ func (r *Rulebase) RunRecordGeneration(fatalErr chan error) (err error) {
 }
 
 // This runs a rule give the record
-func (r *Rulebase) RunRule(recordStruct *chk.CheckpointIdentifier) {
-	dimensions := make(map[string]string)
-	dimensions["shardId"] = *recordStruct.ShardId
-	dimensions["rule"] = r.RuleName
+func RunRule(r *Rulebase, shardId string, outbound []byte) (bool, error){
+	success, err := (*r.Destination.Plugin).Publish(r.Destination.Pointer, outbound)
 
-	startTime := time.Now()
-
-	logger.WithFields(logrus.Fields{
-		"rule":           (*r.Destination.Plugin).Name(),
-		"sequenceNumber": recordStruct.Id,
-	}).Debug("Running Predicate")
-
-	res, _, err := r.runProjection(recordStruct.Payload, "PREDICATE")
-
-	logger.WithFields(logrus.Fields{
-		"rule":      (*r.Destination.Plugin).Name(),
-		"predicate": res,
-	}).Debug("Predicate result")
-
-	if err != nil {
-		logger.WithFields(logrus.Fields{
-			"rule": (*r.Destination.Plugin).Name(),
-			"err":  err.Error(),
-		}).Fatal("Error happened in running predicate")
-		return
-	} else if res == false {
-		if r.Checkpoint {
-			recordStruct.Channel <- 1
-		}
-		return
-	}
-
-	// Do the cache
-	logger.WithFields(logrus.Fields{
-		"rule": (*r.Destination.Plugin).Name(),
-	}).Debug("Starting cache")
-
-	res, _, err = r.runProjection(recordStruct.Payload, "CACHE")
-
-	if err != nil {
-		logger.WithFields(logrus.Fields{
-			"rule": (*r.Destination.Plugin).Name(),
-			"err":  err.Error(),
-		}).Fatal("Error happened in running cache")
-		return
-	} else if res == false {
-		if r.Checkpoint {
-			recordStruct.Channel <- 1
-		}
-		return
-	}
-
-	// do the projection
-	logger.WithFields(logrus.Fields{
-		"rule": (*r.Destination.Plugin).Name(),
-	}).Debug("Starting projection")
-
-	res, bytes, err := r.runProjection(recordStruct.Payload, "PROJECTION")
-
-	logger.WithFields(logrus.Fields{
-		"rule":   (*r.Destination.Plugin).Name(),
-		"result": res,
-	}).Debug("Finished projection")
-	if err != nil {
-		logger.WithFields(logrus.Fields{
-			"rule": (*r.Destination.Plugin).Name(),
-			"err":  err.Error(),
-		}).Fatal("Error happened in running Projection")
-		return
-	} else if res == false || bytes == nil {
-		if r.Checkpoint {
-			recordStruct.Channel <- 1
-		}
-		return
-	}
-
-	(*r.MetricSender).SendCounter("rule_count", int64(1), dimensions)
-	//r.MetricSender.SendCounter("rule_count", int64(1), dimensions)
-
-	// downstream send!
-	var retry int32
-	for retry = 0; retry < 3; retry++ {
-		logger.WithFields(logrus.Fields{
-			"rule": (*r.Destination.Plugin).Name(),
-		}).Debug("Starting publish")
-		success, err := (*r.Destination.Plugin).Publish(r.Destination.Pointer, &bytes, dimensions)
-
-		if success {
-			if r.Checkpoint {
-				recordStruct.Channel <- 1
-			}
-			logger.WithFields(logrus.Fields{
-				"rule": (*r.Destination.Plugin).Name(),
-			}).Debug("Successful publish")
-			break
-		} else {
-			if r.Checkpoint && retry >= 2 {
-				logger.WithFields(logrus.Fields{
-					"rule": (*r.Destination.Plugin).Name(),
-					"err":  err.Error(),
-				}).Fatal("Unsuccessful publish")
-				(*r.MetricSender).SendCounter("critical_errors_count", int64(1), dimensions)
-			}
-			logger.WithFields(logrus.Fields{
-				"rule": (*r.Destination.Plugin).Name(),
-				"err":  err.Error(),
-			}).Error("Unsuccessful publish")
-		}
-	}
-
-	endTime := time.Now()
-
-	diff := endTime.Sub(startTime)
-	execTime := float64(diff) / float64(time.Second)
-	dimensions["retry_count"] = string(retry)
-	(*r.MetricSender).SendGauge("rule_execution_time", execTime, dimensions)
-
-	logger.WithFields(logrus.Fields{
-		"rule": (*r.Destination.Plugin).Name(),
-	}).Debug("Rule successfully run")
-
-	return
+	return success, err
 }
 
 // does all the projects of a record that will be further processed
 // gets a JSON formatted byte array and passes it back
-func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bool, outbound []byte, err error) {
+func RunProjection(r *Rulebase, record string, ruleProperty string) (result bool, outbound []byte, err error) {
 
 	downstream := make(map[string]interface{})
 	var sendAllFlag bool
@@ -265,7 +143,7 @@ func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bo
 
 					stepValue := k.Value.(*Step).Value
 					if *stepValue != "OPERATOR" {
-						eres, eerr := (*k.Value.(*Step).Plugin).Runnable(*stepValue, *record)
+						eres, eerr := (*k.Value.(*Step).Plugin).Runnable(*stepValue, record)
 						if eerr != nil {
 							logger.WithFields(logrus.Fields{
 								"rule": (*r.Destination.Plugin).Name(),
@@ -311,9 +189,9 @@ func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bo
 			}
 
 			if ruleProperty != "CACHE" {
-				allVals = append(allVals, *record)
+				allVals = append(allVals, record)
 			} else {
-				allVals = append(allVals, *step.Value, *record)
+				allVals = append(allVals, *step.Value, record)
 			}
 
 			//for _, vals := range allVals {
@@ -370,13 +248,7 @@ func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bo
 
 			if ruleProperty == "CACHE" && step != i.Value.(Base).Line.Front().Value.(*Step) {
 				if (*i.Value.(Base).Line.Front().Value.(*Step)).Plugin != nil {
-					var tmp string
-					if reflect.TypeOf(res).Kind() != reflect.String {
-						tmp = fmt.Sprintf("%v", res)
-					} else {
-						tmp = res.(string)
-					}
-					(*i.Value.(Base).Line.Front().Value.(*Step).Plugin).Runnable(*step.ID, tmp)
+					(*i.Value.(Base).Line.Front().Value.(*Step).Plugin).Runnable(*step.ID, res)
 				}
 			}
 
@@ -396,7 +268,7 @@ func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bo
 			j.Value = newStep
 
 			if ruleProperty == "PROJECTION" {
-				if step.Plugin != nil && (*step.Plugin).Name() == "SENDALL" {
+				if (*step.Plugin).Name() == "SENDALL" {
 					sendAllFlag = true
 					break
 				}
@@ -411,7 +283,7 @@ func (r *Rulebase) runProjection(record *string, ruleProperty string) (result bo
 			logger.WithFields(logrus.Fields{
 				"rule": (*r.Destination.Plugin).Name(),
 			}).Debug("Send all record")
-			return true, []byte((*record)), nil
+			return true, []byte(record), nil
 
 		} else {
 			obound, err := json.Marshal(downstream)
