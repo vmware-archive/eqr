@@ -30,8 +30,6 @@ var (
 	ErrConfigInvalidLeaderActionFrequency = errors.New("leaderActionFrequency config value is mandatory and must be at least as long as ShardCheckFrequency")
 	// ErrConfigInvalidBufferSize - BufferSize config value is mandatory
 	ErrConfigInvalidBufferSize = errors.New("bufferSize config value is mandatory")
-	// ErrConfigInvalidStats - Stats cannot be nil
-	ErrConfigInvalidStats = errors.New("stats cannot be nil")
 	// ErrConfigInvalidDynamoCapacity - Dynamo read/write capacity cannot be 0
 	ErrConfigInvalidDynamoCapacity = errors.New("dynamo read/write capacity cannot be 0")
 

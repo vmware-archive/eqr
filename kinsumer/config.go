@@ -11,8 +11,6 @@ import (
 
 // Config holds all configuration values for a single Kinsumer instance
 type Config struct {
-	stats StatReceiver
-
 	// ---------- [ Per Shard Worker ] ----------
 	// Time to sleep if no records are found
 	throttleDelay time.Duration
@@ -50,7 +48,6 @@ func NewConfig() Config {
 		shardCheckFrequency:   1 * time.Minute,
 		leaderActionFrequency: 1 * time.Minute,
 		bufferSize:            100,
-		stats:                 &NoopStatReceiver{},
 		dynamoReadCapacity:    10,
 		dynamoWriteCapacity:   10,
 		dynamoWaiterDelay:     3 * time.Second,
@@ -84,12 +81,6 @@ func (c Config) WithLeaderActionFrequency(leaderActionFrequency time.Duration) C
 // WithBufferSize returns a Config with a modified buffer size
 func (c Config) WithBufferSize(bufferSize int) Config {
 	c.bufferSize = bufferSize
-	return c
-}
-
-// WithStats returns a Config with a modified stats
-func (c Config) WithStats(stats StatReceiver) Config {
-	c.stats = stats
 	return c
 }
 
@@ -135,10 +126,6 @@ func validateConfig(c *Config) error {
 
 	if c.bufferSize == 0 {
 		return ErrConfigInvalidBufferSize
-	}
-
-	if c.stats == nil {
-		return ErrConfigInvalidStats
 	}
 
 	if c.dynamoReadCapacity == 0 || c.dynamoWriteCapacity == 0 {

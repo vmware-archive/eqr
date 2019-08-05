@@ -25,7 +25,6 @@ type checkpointer struct {
 	ownerName             string
 	ownerID               string
 	maxAgeForClientRecord time.Duration
-	stats                 StatReceiver
 	captured              bool
 	dirty                 bool
 	mutex                 sync.Mutex
@@ -55,8 +54,7 @@ func capture(
 	dynamodbiface dynamodbiface.DynamoDBAPI,
 	ownerName string,
 	ownerID string,
-	maxAgeForClientRecord time.Duration,
-	stats StatReceiver) (*checkpointer, error) {
+	maxAgeForClientRecord time.Duration) (*checkpointer, error) {
 
 	cutoff := time.Now().Add(-maxAgeForClientRecord).UnixNano()
 
@@ -151,7 +149,6 @@ func capture(
 		dynamodb:              dynamodbiface,
 		ownerName:             ownerName,
 		ownerID:               ownerID,
-		stats:                 stats,
 		sequenceNumber:        aws.StringValue(record.SequenceNumber),
 		maxAgeForClientRecord: maxAgeForClientRecord,
 		captured:              true,
@@ -241,9 +238,6 @@ func (cp *checkpointer) commit() (bool, error) {
 		"shardId": cp.shardID,
 	}).Debug("Checkpoint committed")
 
-	if sn != nil {
-		cp.stats.Checkpoint()
-	}
 	cp.dirty = false
 	return finished, nil
 }
@@ -283,10 +277,6 @@ func (cp *checkpointer) release() error {
 		  "err": err.Error(),
 		}).Error("error releasing checkpoint")
 		return fmt.Errorf("error releasing checkpoint: %s", err)
-	}
-
-	if cp.sequenceNumber != "" {
-		cp.stats.Checkpoint()
 	}
 
 	cp.captured = false
